@@ -81,6 +81,8 @@ th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertic
 th{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
 td.r,th.r{text-align:right}
 tr.click{cursor:pointer} tr.click:hover td{background:var(--surface2)}
+tr.auto td{color:var(--muted);font-style:italic}
+.banner.warn{border-color:var(--warn);color:var(--warn)}
 tr.tot td{font-weight:700;border-top:2px solid var(--line)}
 tr.sec td{background:var(--surface2);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
 .ytab td:first-child,.ytab th:first-child{position:sticky;left:0;background:var(--surface);min-width:210px}
@@ -522,11 +524,17 @@ function vLanc(main){
   const y=selAno, a=y*12+selMes;
   const filtTxt=r=>!lancBusca||JSON.stringify(r).toLowerCase().includes(lancBusca.toLowerCase());
   const inPeriod=(ini,fim)=>lancTodoAno?(ini!=null&&ini<=y*12+12&&fim>=y*12+1):(ini!=null&&ini<=a&&a<=fim);
-  let list=[], cols='', body='';
+  let list=[], cols='', body='', autos=[];
   if(lancTab==='compras'){
     list=P.compras.filter(c=>(lancTodoAno?Math.floor((c.fat-1)/12)===y:c.fat===a)&&filtTxt(c)).sort((p,q)=>(p.fat-q.fat)||String(p.data||'').localeCompare(String(q.data||''))||((p.ordem||0)-(q.ordem||0)));
     cols='<th>Data</th><th>Descrição</th><th>Cartão</th><th>Categoria</th><th class="r">Valor</th><th>Fatura</th>';
-    body=list.map(c=>`<tr class="click" data-id="${c.id}"><td class="num">${fmtD(c.data)||'<span class="note">'+mshort(c.fat)+'</span>'}</td><td>${esc(c.desc)}</td><td>${chipCard(c.cartao)}</td><td>${c.cat?esc(c.cat):'<span class="cell-bad">sem categoria</span>'}</td><td class="r num">${money(c.valor)}</td><td class="note">${mshort(c.fat)}</td></tr>`).join('');
+    // parcelas, assinaturas e contas que caem sozinhas em cada fatura (não são registros novos: só aparecem aqui para você ver e não lançar de novo)
+    const meses=lancTodoAno?[...Array(12)].map((_,i)=>y*12+i+1):[a];
+    autos=[]; meses.forEach(m=>P.fixos.forEach(f=>{ if(f.ini!=null&&f.ini<=m&&m<=f.fim&&f.onde!==C3&&filtTxt(f)) autos.push({f,m,v:valConta(f,m)}) }));
+    const linhas=list.map(c=>({fat:c.fat,k:1,data:c.data||'',c})).concat(autos.map(x=>({fat:x.m,k:0,data:'',x}))).sort((p,q)=>(p.fat-q.fat)||(p.k-q.k)||p.data.localeCompare(q.data)||(((p.c&&p.c.ordem)||0)-((q.c&&q.c.ordem)||0)));
+    const rot=x=>x.f.vezes?`parcela ${x.m-x.f.ini+1}/${x.f.vezes}`:(x.f.tipo==='Assinatura'?'assinatura':x.f.tipo==='Conta fixa'?'conta da casa':'fixo');
+    body=linhas.map(l=>l.c?`<tr class="click" data-id="${l.c.id}"><td class="num">${fmtD(l.c.data)||'<span class="note">'+mshort(l.c.fat)+'</span>'}</td><td>${esc(l.c.desc)}</td><td>${chipCard(l.c.cartao)}</td><td>${l.c.cat?esc(l.c.cat):'<span class="cell-bad">sem categoria</span>'}</td><td class="r num">${money(l.c.valor)}</td><td class="note">${mshort(l.c.fat)}</td></tr>`
+      :`<tr class="click auto" data-fx="${l.x.f.id}" title="Entra sozinho todo mês. Clique para ver o cadastro em Fixos e parcelas."><td class="note">${rot(l.x)}</td><td>${esc(l.x.f.desc)} <span class="chip">automático</span></td><td>${chipCard(l.x.f.onde)}</td><td>${esc(l.x.f.tipo||'')}</td><td class="r num">${money(l.x.v)}</td><td class="note">${mshort(l.x.m)}</td></tr>`).join('');
   } else if(lancTab==='fixos'){
     list=P.fixos.filter(f=>inPeriod(f.ini,f.fim)&&filtTxt(f)).sort((p,q)=>(p.ini-q.ini)||((p.ordem||0)-(q.ordem||0)));
     cols='<th>Descrição</th><th>Tipo</th><th>Onde</th><th class="r">Por mês</th><th>Período</th><th class="r">Sua parte</th><th class="r">Volta p/ você</th>';
@@ -544,16 +552,28 @@ function vLanc(main){
      <button class="primary" id="btnNovo">+ ${lancTab==='compras'?'Nova compra':lancTab==='fixos'?'Novo fixo ou parcela':'Nova entrada'}</button></div>
    <div class="filters"><input type="search" id="busca" placeholder="Buscar (descrição, pessoa, cartão…)" value="${esc(lancBusca)}" aria-label="Buscar lançamentos">
      <label class="note"><input type="checkbox" id="todoAno" ${lancTodoAno?'checked':''}> o ano todo</label></div>
-   <p class="note">${nome} ${lancTodoAno?'de '+y:'da fatura de '+MESES[selMes-1].toLowerCase()+' '+y} · ${list.length} ${list.length===1?'lançamento':'lançamentos'} · ${lancTab==='fixos'?'sua parte':'total'}: <b class="num">${money(total)}</b>${lancTab==='compras'?' (sem pagamentos de fatura)':''}</p>
-   <div class="scroll">${list.length?`<table><thead><tr>${cols}</tr></thead><tbody>${body}</tbody></table>`:`<div class="empty">Nada aqui neste período. Use “${lancTab==='compras'?'Nova compra':lancTab==='fixos'?'Novo fixo ou parcela':'Nova entrada'}” para lançar.</div>`}</div>
+   <p class="note">${nome} ${lancTodoAno?'de '+y:'da fatura de '+MESES[selMes-1].toLowerCase()+' '+y} · ${list.length} ${list.length===1?'lançamento':'lançamentos'} · ${lancTab==='fixos'?'sua parte':'total'}: <b class="num">${money(total)}</b>${lancTab==='compras'?' (sem pagamentos de fatura)':''}${autos.length?` · mais <b class="num">${money(autos.reduce((s,x)=>s+x.v,0))}</b> em ${autos.length} ${autos.length===1?'parcela/fixo automático':'parcelas e fixos automáticos'} (em cinza; já entram sozinhos, não lance de novo)`:''}</p>
+   <div class="scroll">${list.length||autos.length?`<table><thead><tr>${cols}</tr></thead><tbody>${body}</tbody></table>`:`<div class="empty">Nada aqui neste período. Use “${lancTab==='compras'?'Nova compra':lancTab==='fixos'?'Novo fixo ou parcela':'Nova entrada'}” para lançar.</div>`}</div>
   </section></div>`;
   main.querySelectorAll('.subtabs button').forEach(b=>b.addEventListener('click',()=>{ lancTab=b.dataset.t; render() }));
   const bus=$('#busca'); bus.addEventListener('input',()=>{ lancBusca=bus.value; clearTimeout(bus._t); bus._t=setTimeout(()=>{ render(); const nb=$('#busca'); nb.focus(); nb.setSelectionRange(nb.value.length,nb.value.length) },350) });
   $('#todoAno').addEventListener('change',e=>{ lancTodoAno=e.target.checked; render() });
   $('#btnNovo').addEventListener('click',()=>openForm(lancTab,null));
-  main.querySelectorAll('tr.click').forEach(tr=>tr.addEventListener('click',()=>openForm(lancTab,tr.dataset.id)));
+  main.querySelectorAll('tr.click').forEach(tr=>tr.addEventListener('click',()=>tr.dataset.fx?openForm('fixos',tr.dataset.fx):openForm(lancTab,tr.dataset.id)));
 }
 
+/* ---------- alerta de duplicidade (compra igual a parcela/fixo do mês ou a outra compra) ---------- */
+function possiveisDuplicados(o,id){
+  const c=Calc.compra(o,P.cfg), v=nn(o.valor); if(c.fat==null||v==null) return [];
+  const avisos=[];
+  P.fixos.filter(f=>f.onde===o.cartao&&f.ini!=null&&f.ini<=c.fat&&c.fat<=f.fim&&Math.abs(valConta(f,c.fat)-v)<0.05).forEach(f=>{
+    const n=f.vezes?` (parcela ${c.fat-f.ini+1}/${f.vezes})`:'';
+    avisos.push(`Atenção: “${f.desc}”${n} já entra sozinho na fatura de ${mtxt(c.fat).toLowerCase()} com ${money(valConta(f,c.fat))}. Lançar aqui pode contar duas vezes.`) });
+  const dd=(a,b)=>{ const x=pd(a),y=pd(b); return x&&y?Math.abs((Date.UTC(x.y,x.m-1,x.d)-Date.UTC(y.y,y.m-1,y.d))/864e5):99 };
+  P.compras.filter(x=>x.id!==id&&x.cartao===o.cartao&&Math.abs(x.valor-v)<0.011&&(o.data&&x.data?dd(o.data,x.data)<=3:x.fat===c.fat)).forEach(x=>{
+    avisos.push(`Já existe “${x.desc}” de ${money(x.valor)} no ${x.cartao}${x.data?' em '+fmtD(x.data):''}. Pode ser a mesma compra.`) });
+  return avisos;
+}
 /* ---------- formulários ---------- */
 function opts(arr,sel,blank){ return (blank?`<option value="">${blank}</option>`:'')+arr.map(v=>`<option ${v===sel?'selected':''}>${esc(v)}</option>`).join('') }
 function mesOpts(sel){ return `<option value="">—</option>`+MESES.map((n,i)=>`<option value="${i+1}" ${Number(sel)===i+1?'selected':''}>${n}</option>`).join('') }
@@ -623,6 +643,7 @@ function openForm(kind,id,preset){
     else { const x=Calc.entrada(o); if(x.ini) t=`${money(x.cheio)} por mês, de ${mtxt(x.ini).toLowerCase()} a ${mtxt(x.fim).toLowerCase()}.` }
     $('#prev').textContent=t };
   frm.addEventListener('input',preview); preview();
+  frm.addEventListener('input',()=>{ const b=$('#bSave'); if(b&&b.dataset.ok){ delete b.dataset.ok; b.textContent='Salvar'; $('#ferr').textContent='' } });
   $('#bCancel').onclick=closeModal; $('#mbg').addEventListener('click',e=>{ if(e.target.id==='mbg') closeModal() });
   document.addEventListener('keydown',function k(e){ if(e.key==='Escape'){ closeModal(); document.removeEventListener('keydown',k) } });
   if($('#bSave')) $('#bSave').onclick=async()=>{
@@ -632,6 +653,8 @@ function openForm(kind,id,preset){
     if(!o.desc) errs.push('Digite uma descrição.');
     if(errs.length){ $('#ferr').textContent=errs.join(' '); return }
     const yy=kind==='compras'?Math.floor((Calc.compra(o,P.cfg).fat-1)/12):null; if(yy&&locked(yy)){ $('#ferr').textContent='Esse mês é de um ano trancado.'; return }
+    if(kind==='compras'&&!$('#bSave').dataset.ok){ const av=possiveisDuplicados(o,id);
+      if(av.length){ $('#ferr').innerHTML=`<div class="banner warn">${av.map(esc).join('<br>')}<br>Se for mesmo outra compra, clique em “Salvar mesmo assim”.</div>`; $('#bSave').dataset.ok='1'; $('#bSave').textContent='Salvar mesmo assim'; return } }
     if(!rec) o.ordem=Date.now();
     const col=COLS[colKey]; const nid=id||newId(kind[0]);
     if(await put(col,nid,clean(o))){ closeModal(); toast(rec?'Alteração salva':'Lançamento salvo') } };
