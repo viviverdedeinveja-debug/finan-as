@@ -563,15 +563,26 @@ function vLanc(main){
 }
 
 /* ---------- alerta de duplicidade (compra igual a parcela/fixo do mês ou a outra compra) ---------- */
+/* nomes: ignora acentos, "parcela 3/6", sufixos de pagamento e palavras curtas; parecido = compartilha uma palavra de 4+ letras */
+const PALAVRAS_VAZIAS=new Set(['nupay','pix','credito','debito','compra','pagamento','parcela','brasil','ltda','com','para','loja','mercadopago']);
+function palavras(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/parcela\s*\d+\s*\/\s*\d+/g,' ').replace(/[^a-z0-9]+/g,' ').split(' ').filter(w=>w.length>=4&&!PALAVRAS_VAZIAS.has(w)) }
+function nomeParecido(a,b){ const A=palavras(a), B=palavras(b); if(!A.length||!B.length) return false;
+  return A.some(x=>B.some(y=>x===y||(x.length>=5&&y.includes(x))||(y.length>=5&&x.includes(y)))) }
+function nomesDoFixo(f){ return [f.desc,f.apelido].filter(Boolean).join(' ') }
 function possiveisDuplicados(o,id){
   const c=Calc.compra(o,P.cfg), v=nn(o.valor); if(c.fat==null||v==null) return [];
   const avisos=[];
-  P.fixos.filter(f=>f.onde===o.cartao&&f.ini!=null&&f.ini<=c.fat&&c.fat<=f.fim&&Math.abs(valConta(f,c.fat)-v)<0.05).forEach(f=>{
+  P.fixos.filter(f=>f.onde===o.cartao&&f.ini!=null&&f.ini<=c.fat&&c.fat<=f.fim).forEach(f=>{
+    const fv=valConta(f,c.fat), mesmoValor=Math.abs(fv-v)<0.05, parecido=nomeParecido(o.desc,nomesDoFixo(f)), perto=Math.abs(fv-v)<=Math.max(1,fv*0.1);
+    if(!(mesmoValor||(parecido&&perto))) return;
     const n=f.vezes?` (parcela ${c.fat-f.ini+1}/${f.vezes})`:'';
-    avisos.push(`Atenção: “${f.desc}”${n} já entra sozinho na fatura de ${mtxt(c.fat).toLowerCase()} com ${money(valConta(f,c.fat))}. Lançar aqui pode contar duas vezes.`) });
+    const pq=mesmoValor&&parecido?'mesmo valor e nome parecido':mesmoValor?'mesmo valor':'nome parecido e valor próximo';
+    avisos.push(`Atenção (${pq}): “${f.desc}”${n} já entra sozinho na fatura de ${mtxt(c.fat).toLowerCase()} com ${money(fv)}. Lançar aqui pode contar duas vezes.`) });
   const dd=(a,b)=>{ const x=pd(a),y=pd(b); return x&&y?Math.abs((Date.UTC(x.y,x.m-1,x.d)-Date.UTC(y.y,y.m-1,y.d))/864e5):99 };
-  P.compras.filter(x=>x.id!==id&&x.cartao===o.cartao&&Math.abs(x.valor-v)<0.011&&(o.data&&x.data?dd(o.data,x.data)<=3:x.fat===c.fat)).forEach(x=>{
-    avisos.push(`Já existe “${x.desc}” de ${money(x.valor)} no ${x.cartao}${x.data?' em '+fmtD(x.data):''}. Pode ser a mesma compra.`) });
+  P.compras.filter(x=>x.id!==id&&x.cartao===o.cartao&&Math.abs(x.valor-v)<0.011).forEach(x=>{
+    const perto=o.data&&x.data?dd(o.data,x.data)<=3:x.fat===c.fat, parecido=nomeParecido(o.desc,x.desc);
+    if(!(perto||(parecido&&x.fat===c.fat))) return;
+    avisos.push(`Já existe “${x.desc}” de ${money(x.valor)} no ${x.cartao}${x.data?' em '+fmtD(x.data):''}${parecido?' (mesmo valor e nome parecido)':''}. Pode ser a mesma compra.`) });
   return avisos;
 }
 /* ---------- formulários ---------- */
@@ -611,6 +622,7 @@ function openForm(kind,id,preset){
       <label>Dividir entre (pessoas, contando você)<input name="dividir" inputmode="numeric" value="${r.dividir??''}"></label>
       <label>Partes que voltam em dinheiro<input name="voltam" inputmode="numeric" value="${r.voltam??''}" placeholder="vazio = todas"></label>
       <label class="wide">Com quem (anotação)<input name="pessoas" value="${esc(r.pessoas)}" placeholder="ex.: Stefane, Iarus, Ana Laura"></label>
+      <label class="wide">Como aparece na fatura (opcional)<input name="apelido" value="${esc(r.apelido)}" placeholder="ex.: Ticketmaster, Ingresse, Espacolaser"></label>
       <label>De terceiro (nome)<input name="terceiro" value="${esc(r.terceiro)}" placeholder="compra inteira de outra pessoa"></label>
       <label>1ª fatura · mês<select name="mes">${mesOpts(r.mes)}</select></label><label>1ª fatura · ano<input name="ano" inputmode="numeric" value="${r.ano??''}"></label>
       <label>Última cobrança · mês<select name="ultMes">${mesOpts(r.ultMes)}</select></label><label>Última cobrança · ano<input name="ultAno" inputmode="numeric" value="${r.ultAno??''}"></label></div>
@@ -633,7 +645,7 @@ function openForm(kind,id,preset){
   const frm=$('#frm');
   if(lk) frm.querySelectorAll('input,select').forEach(i=>i.disabled=true);
   const read=()=>{ const o={}; new FormData(frm).forEach((v,k)=>o[k]=v); const out={...(rec||{})}; delete out.id;
-    ['desc','cartao','cat','tipo','onde','deQuem','terceiro','pessoas','data'].forEach(k=>{ if(k in o) out[k]=o[k].trim()||null });
+    ['desc','cartao','cat','tipo','onde','deQuem','terceiro','pessoas','apelido','data'].forEach(k=>{ if(k in o) out[k]=o[k].trim()||null });
     ['valor','total','parcela'].forEach(k=>{ if(k in o) out[k]=parseMoney(o[k]) });
     ['vezes','dividir','voltam','ano','ultAno','mes','ultMes','dia'].forEach(k=>{ if(k in o){ const t=String(o[k]).trim(); out[k]=t===''?null:Number(t) } });
     return out };
@@ -772,7 +784,9 @@ function classificar(){
     if(saida){
       const fat=Calc.absMes({data:t.data},fech);
       if(isF){
-        const fx=P.fixos.find(f=>f.onde===card&&f.ini!=null&&f.ini<=fat&&fat<=f.fim&&Math.abs(f.cheio-v)<0.05);
+        const ativos=P.fixos.filter(f=>f.onde===card&&f.ini!=null&&f.ini<=fat&&fat<=f.fim);
+        const fx=ativos.find(f=>Math.abs(valConta(f,fat)-v)<0.05&&nomeParecido(d,nomesDoFixo(f)))||ativos.find(f=>Math.abs(valConta(f,fat)-v)<0.05)
+          ||ativos.find(f=>nomeParecido(d,nomesDoFixo(f))&&Math.abs(valConta(f,fat)-v)<=Math.max(1,valConta(f,fat)*0.1));
         if(fx) return {...r,status:'fixo',motivo:'já está em Fixos e parcelas: '+fx.desc};
         if(/parcela\s*\d+\s*\/\s*\d+/i.test(d)) return {...r,status:'parcela',motivo:'parcela sem cadastro: cadastre em Fixos e parcelas'};
       }
