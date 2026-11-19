@@ -736,12 +736,16 @@ function classificar(){
     if(j>=0){ const liq=Math.round((-itens[j].valor-t.valor)*100)/100;
       const c=P.compras.find(c=>!usadosC.has(c.id)&&c.cartao===card&&Math.abs(c.valor-liq)<0.011&&diasEntre(c.data,t.data)<=3);
       if(c){ pre[i]=pre[j]=c.id; usadosC.add(c.id) } } } });
+  // extrato: Pix no crédito entra na conta ("valor adicionado…") e sai no mesmo dia para a pessoa; o custo real vem na fatura do cartão
+  const pixCred={};
+  if(!isF) itens.forEach((t,i)=>{ if(t.valor>0&&/valor adicionado|pix no cr[eé]dito/i.test(t.desc||'')){ pixCred[i]=1;
+    const j=itens.findIndex((u,k)=>!(k in pixCred)&&u.valor<0&&u.data===t.data&&Math.abs(u.valor+t.valor)<0.011); if(j>=0) pixCred[j]=1 } });
   return itens.map((t,i)=>{
     const v=Math.round(Math.abs(t.valor)*100)/100, saida=t.valor<0, d=t.desc||'';
     const r={...t,i,v,saida,onde:card,status:'novo'};
     if(i in pre) return {...r,status:'ok',motivo:'lançado junto com o estorno (valor líquido)',ref:pre[i]};
     if(/pagamento recebido|pagamento de fatura|^pagamento$/i.test(d)) return {...r,status:'ignorar',motivo:'pagamento de fatura'};
-    if(!isF&&/valor adicionado|pix no cr[eé]dito/i.test(d)) return {...r,status:'ignorar',motivo:'Pix no crédito: já vem na fatura do cartão'};
+    if(!isF&&(i in pixCred||/valor adicionado|pix no cr[eé]dito/i.test(d))) return {...r,status:'ignorar',motivo:'Pix no crédito: o custo de verdade vem na fatura do cartão'};
     if(saida){
       const fat=Calc.absMes({data:t.data},fech);
       if(isF){
