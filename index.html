@@ -538,7 +538,7 @@ function vLanc(main){
   } else if(lancTab==='fixos'){
     list=P.fixos.filter(f=>inPeriod(f.ini,f.fim)&&filtTxt(f)).sort((p,q)=>(p.ini-q.ini)||((p.ordem||0)-(q.ordem||0)));
     cols='<th>Descrição</th><th>Tipo</th><th>Onde</th><th class="r">Por mês</th><th>Período</th><th class="r">Sua parte</th><th class="r">Volta p/ você</th>';
-    body=list.map(f=>`<tr class="click" data-id="${f.id}"><td>${esc(f.desc)}${f.dividir?` <span class="chip">÷${f.dividir}${f.voltam!=null&&f.voltam!==''?' · voltam '+f.voltam:''}</span>`:''}${f.terceiro?` <span class="chip">de ${esc(f.terceiro)}</span>`:''}</td><td>${esc(f.tipo||'')}</td><td>${chipCard(f.onde)}</td><td class="r num">${money(f.cheio)}</td><td class="note">${mshort(f.ini)} → ${mshort(f.fim)}${f.vezes?' ('+f.vezes+'x)':''}</td><td class="r num">${money(f.sua)}</td><td class="r num">${f.volta?money(f.volta):''}</td></tr>`).join('');
+    body=list.map(f=>`<tr class="click" data-id="${f.id}"><td>${esc(f.desc)}${f.dividir?` <span class="chip">÷${f.dividir}${f.voltam!=null&&f.voltam!==''?' · voltam '+f.voltam:''}</span>`:''}${f.terceiro?` <span class="chip">de ${esc(f.terceiro)}</span>`:''}${f.pessoas?` <span class="chip">com ${esc(f.pessoas)}</span>`:''}</td><td>${esc(f.tipo||'')}</td><td>${chipCard(f.onde)}</td><td class="r num">${money(f.cheio)}</td><td class="note">${mshort(f.ini)} → ${mshort(f.fim)}${f.vezes?' ('+f.vezes+'x)':''}</td><td class="r num">${money(f.sua)}</td><td class="r num">${f.volta?money(f.volta):''}</td></tr>`).join('');
   } else {
     list=P.entradas.filter(e=>inPeriod(e.ini,e.fim)&&filtTxt(e)).sort((p,q)=>(p.ini-q.ini)||String(p.data||'').localeCompare(String(q.data||'')));
     cols='<th>Data</th><th>Descrição</th><th>De quem</th><th>Categoria</th><th class="r">Por mês</th><th>Período</th>';
@@ -569,6 +569,12 @@ function palavras(s){ return String(s||'').toLowerCase().normalize('NFD').replac
 function nomeParecido(a,b){ const A=palavras(a), B=palavras(b); if(!A.length||!B.length) return false;
   return A.some(x=>B.some(y=>x===y||(x.length>=5&&y.includes(x))||(y.length>=5&&x.includes(y)))) }
 function nomesDoFixo(f){ return [f.desc,f.apelido].filter(Boolean).join(' ') }
+/* pessoas que dividem: campo "Com quem" (separado por vírgula) + "De terceiro" */
+function pessoasDoFixo(f){ return String([f.pessoas,f.terceiro].filter(Boolean).join(',')).split(/[,;/]| e /).map(s=>s.trim()).filter(s=>palavras(s).length) }
+function quemDivide(texto,a){ // fixos ativos perto do mês a cuja lista de pessoas aparece no texto
+  const out=[]; P.fixos.forEach(f=>{ if(f.ini==null||f.ini>a+1||f.fim<a-1) return;
+    const p=pessoasDoFixo(f).find(n=>nomeParecido(texto,n)); if(p) out.push({f,p}) }); return out }
+function parteDe(f){ const div=Math.max(1,Number(f.dividir)||1); return f.terceiro?f.cheio:f.cheio/div }
 function possiveisDuplicados(o,id){
   const c=Calc.compra(o,P.cfg), v=nn(o.valor); if(c.fat==null||v==null) return [];
   const avisos=[];
@@ -667,6 +673,11 @@ function openForm(kind,id,preset){
     const yy=kind==='compras'?Math.floor((Calc.compra(o,P.cfg).fat-1)/12):null; if(yy&&locked(yy)){ $('#ferr').textContent='Esse mês é de um ano trancado.'; return }
     if(kind==='compras'&&!$('#bSave').dataset.ok){ const av=possiveisDuplicados(o,id);
       if(av.length){ $('#ferr').innerHTML=`<div class="banner warn">${av.map(esc).join('<br>')}<br>Se for mesmo outra compra, clique em “Salvar mesmo assim”.</div>`; $('#bSave').dataset.ok='1'; $('#bSave').textContent='Salvar mesmo assim'; return } }
+    if(kind==='entradas'&&!$('#bSave').dataset.ok){ const am=Calc.entrada(o).ini;
+      const partes=am==null?[]:quemDivide([o.deQuem,o.desc].filter(Boolean).join(' '),am).filter(x=>x.f.onde!==C3&&x.f.volta>0.004);
+      if(partes.length){ const fs=[...new Set(partes.map(x=>x.f))];
+        $('#ferr').innerHTML=`<div class="banner warn">${esc(partes[0].p)} divide com você ${fs.map(f=>'“'+esc(f.desc)+'” (parte de '+money(parteDe(f))+'/mês)').join(' e ')}, e essa parte já volta sozinha em “volta p/ você”. Se este dinheiro for dessa divisão, não precisa lançar.<br>Se for outra coisa, clique em “Salvar mesmo assim”.</div>`;
+        $('#bSave').dataset.ok='1'; $('#bSave').textContent='Salvar mesmo assim'; return } }
     if(!rec) o.ordem=Date.now();
     const col=COLS[colKey]; const nid=id||newId(kind[0]);
     if(await put(col,nid,clean(o))){ closeModal(); toast(rec?'Alteração salva':'Lançamento salvo') } };
@@ -792,11 +803,25 @@ function classificar(){
       }
       const c=P.compras.find(c=>!usadosC.has(c.id)&&c.cartao===card&&Math.abs(c.valor-v)<0.011&&(c.data?diasEntre(c.data,t.data)<=3:c.fat===fat));
       if(c){ usadosC.add(c.id); return {...r,status:'ok',motivo:'lançado como: '+c.desc,ref:c.id} }
+      if(!isF){ const am=Calc.absMes({data:t.data},null);
+        const pg=quemDivide(d,am).filter(x=>x.f.onde===C3);   // Pix para quem tem a dívida no cartão (Cartão de 3º)
+        if(pg.length){ const x=pg[0], esp=x.f.sua; const bate=Math.abs(esp-v)<=Math.max(1,esp*0.05);
+          return {...r,status:'fixo',motivo:`pagamento para ${x.p}: “${x.f.desc}” (Cartão de 3º, ${money(esp)}/mês)${bate?'':' · valor diferente do esperado'} · já está nos fixos`} } }
       return {...r,kind:'compras',cat:adivinharCat(d)};
     }
     if(isF) return {...r,kind:'entradas',cat:'Estorno de compra',motivo:'crédito na fatura (estorno)'};
     const e=P.entradas.find(e=>!usadosE.has(e.id)&&Math.abs((nn(e.total)!=null?e.total:e.cheio)-v)<0.011&&(e.data?diasEntre(e.data,t.data)<=3:true));
     if(e){ usadosE.add(e.id); return {...r,status:'ok',motivo:'lançado como: '+e.desc,ref:e.id} }
+    const am=Calc.absMes({data:t.data},null);
+    const partes=quemDivide(d,am).filter(x=>x.f.onde!==C3&&x.f.volta>0.004);   // Pix de quem divide uma compra com você
+    if(partes.length){ const p=partes[0].p, fs=[...new Set(partes.map(x=>x.f))]; const esp=fs.reduce((s,f)=>s+parteDe(f),0);
+      // bate se o valor for uma combinação de partes (ex.: 2 partes dos Ensaios + 1 da Sapucaí), até as partes que voltam de cada compra
+      const combina=(i,resto)=>{ if(Math.abs(resto)<=1) return true; if(i>=fs.length||resto<0) return false; const f=fs[i], pa=parteDe(f), max=Math.max(1,Number(f.voltam)||Math.max(1,(Number(f.dividir)||1)-1));
+        for(let k=0;k<=max;k++){ if(combina(i+1,resto-k*pa)) return true } return false };
+      const bate=v>1&&combina(0,v);
+      const lista=fs.map(f=>'“'+f.desc+'” ('+money(parteDe(f))+')').join(' e ');
+      if(bate) return {...r,status:'parte',motivo:`parte de ${p} em ${lista}: já volta sozinha em “volta p/ você”`};
+      return {...r,kind:'entradas',cat:'Estorno de amigos',motivo:`${p} divide ${lista} com você, mas o valor não bate com as partes: se for outra coisa, marque para lançar`} }
     return {...r,kind:'entradas',cat:'Estorno de amigos'};
   });
 }
@@ -812,7 +837,7 @@ function vConferir(main){
   if(conf.tipo==='fatura'&&conf.saldo!=null&&conf.ate){ const d=pd(conf.ate); const dia=new Date(Date.UTC(d.y,d.m-1,d.d-1)); const ref=dia.toISOString().slice(0,10);
     const a=Calc.absMes({data:ref},Calc.fech(P.cfg,conf.cartao)); conf.saldoMes=a;
     saldoHtml=`<div class="banner" style="margin-top:10px">O arquivo mostra <b class="num">${money(Math.abs(conf.saldo))}</b> na fatura do ${esc(conf.cartao)} (até ${fmtD(conf.ate)}). <button class="link" id="cfSaldo">Usar como “fatura do app” de ${mtxt(a).toLowerCase()}</button></div>` }
-  const chip=x=>({ok:'<span class="chip" style="background:var(--good);color:#fff">já lançado</span>',novo:'<span class="chip" style="background:var(--accent);color:var(--accent-ink)">novo</span>',fixo:'<span class="chip">fixo/assinatura</span>',parcela:'<span class="chip" style="background:var(--warn);color:#fff">parcela sem cadastro</span>',ignorar:'<span class="chip">ignorado</span>'})[x.status];
+  const chip=x=>({parte:'<span class="chip" style="background:var(--good);color:#fff">parte de quem divide</span>',ok:'<span class="chip" style="background:var(--good);color:#fff">já lançado</span>',novo:'<span class="chip" style="background:var(--accent);color:var(--accent-ink)">novo</span>',fixo:'<span class="chip">fixo/assinatura</span>',parcela:'<span class="chip" style="background:var(--warn);color:#fff">parcela sem cadastro</span>',ignorar:'<span class="chip">ignorado</span>'})[x.status];
   main.innerHTML=`<div class="view"><section class="panel"><div class="panel-head"><h2>Conferir extrato ou fatura</h2><span class="note">compara o arquivo do banco com o que está lançado e lança o que faltar</span></div>
    <div class="form">
     <label>O arquivo é<select id="cfTipo"><option value="fatura" ${conf.tipo==='fatura'?'selected':''}>Fatura de cartão</option><option value="extrato" ${conf.tipo==='extrato'?'selected':''}>Extrato da conta (Pix e débito)</option></select></label>
@@ -821,7 +846,7 @@ function vConferir(main){
    </div>
    <p class="note">No app do Nubank: na fatura, use “Exportar” (OFX ou CSV); na conta, peça o extrato em OFX ou CSV. Arquivo PDF não dá para ler aqui.</p>
    ${conf.erro?`<div class="banner bad">${esc(conf.erro)}</div>`:''}
-   ${conf.itens?`<p class="note">${esc(conf.arquivo)} · ${lista.length} movimentos · <b>${cnt('ok')}</b> já lançados · <b>${cnt('novo')}</b> novos · ${cnt('fixo')} fixos ou assinaturas · ${cnt('parcela')} parcelas sem cadastro · ${cnt('ignorar')} ignorados</p>`:''}
+   ${conf.itens?`<p class="note">${esc(conf.arquivo)} · ${lista.length} movimentos · <b>${cnt('ok')}</b> já lançados · <b>${cnt('novo')}</b> novos · ${cnt('fixo')} fixos ou assinaturas · ${cnt('parte')} partes de quem divide · ${cnt('parcela')} parcelas sem cadastro · ${cnt('ignorar')} ignorados</p>`:''}
    ${saldoHtml}
   </section>
   ${lista.length?`<section class="panel"><div class="panel-head"><h2>Movimentos do arquivo</h2><button class="primary" id="cfGo" ${nSel?'':'disabled'}>Lançar selecionados (${nSel})</button></div>
