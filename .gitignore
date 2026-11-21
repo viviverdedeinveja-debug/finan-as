@@ -1,0 +1,11 @@
+# pasta de teste local (pode ter dados reais importados)
+teste/
+# nunca enviar dados pessoais para este repositório público
+*.ofx
+*.csv
+*.pdf
+backup*.json
+financas-backup*.json
+dados*.json
+seed*.json
+*.xlsx
